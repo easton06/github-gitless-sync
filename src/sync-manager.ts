@@ -932,26 +932,59 @@ export default class SyncManager {
       // File already exists and has the same SHA, no need to download it again.
       return;
     }
-    const blob = await this.client.getBlob({ sha: file.sha, retry: true });
-    const normalizedPath = normalizePath(file.path);
-    const fileFolder = normalizePath(
-      normalizedPath.split("/").slice(0, -1).join("/"),
-    );
-    if (!(await this.vault.adapter.exists(fileFolder))) {
-      await this.vault.adapter.mkdir(fileFolder);
+    
+    try {
+      const blob = await this.client.getBlob({ sha: file.sha, retry: true });
+      const normalizedPath = normalizePath(file.path);
+      const fileFolder = normalizePath(
+        normalizedPath.split("/").slice(0, -1).join("/"),
+      );
+      
+      // Create directory if it doesn't exist
+      if (!(await this.vault.adapter.exists(fileFolder))) {
+        try {
+          await this.vault.adapter.mkdir(fileFolder);
+        } catch (dirError) {
+          await this.logger.error("Failed to create directory", { 
+            fileFolder, 
+            error: dirError,
+            originalError: String(dirError)
+          });
+          throw new Error(`Failed to create directory '${fileFolder}': ${dirError}`);
+        }
+      }
+      
+      // Write file content
+      try {
+        await this.vault.adapter.writeBinary(
+          normalizedPath,
+          base64ToArrayBuffer(blob.content),
+        );
+      } catch (writeError) {
+        await this.logger.error("Failed to write file", { 
+          normalizedPath, 
+          error: writeError,
+          originalError: String(writeError)
+        });
+        throw new Error(`Failed to create file '${normalizedPath}': ${writeError}`);
+      }
+      
+      this.metadataStore.data.files[file.path] = {
+        path: file.path,
+        sha: file.sha,
+        dirty: false,
+        justDownloaded: true,
+        lastModified: lastModified,
+      };
+      await this.metadataStore.save();
+    } catch (error) {
+      await this.logger.error("Error in downloadFile", { 
+        filePath: file.path,
+        error: error,
+        originalError: String(error)
+      });
+      throw error;
     }
-    await this.vault.adapter.writeBinary(
-      normalizedPath,
-      base64ToArrayBuffer(blob.content),
-    );
-    this.metadataStore.data.files[file.path] = {
-      path: file.path,
-      sha: file.sha,
-      dirty: false,
-      justDownloaded: true,
-      lastModified: lastModified,
-    };
-    await this.metadataStore.save();
   }
 
   async deleteLocalFile(filePath: string) {
