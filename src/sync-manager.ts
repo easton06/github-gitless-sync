@@ -18,7 +18,7 @@ import MetadataStore, {
 import EventsListener from "./events-listener";
 import { GitHubSyncSettings } from "./settings/settings";
 import Logger, { LOG_FILE_NAME } from "./logger";
-import { decodeBase64String, hasTextExtension } from "./utils";
+import { decodeBase64String, hasTextExtension, validateFilePath } from "./utils";
 import GitHubSyncPlugin from "./main";
 import { BlobReader, Entry, Uint8ArrayWriter, ZipReader } from "@zip.js/zip.js";
 
@@ -565,34 +565,49 @@ export default class SyncManager {
 
     await Promise.all(
       actions.map(async (action) => {
-        switch (action.type) {
-          case "upload": {
-            const normalizedPath = normalizePath(action.filePath);
-            const resolution = conflictResolutions.find(
-              (c: ConflictResolution) => c.filePath === action.filePath,
-            );
-            // If the file was conflicting we need to read the content from the
-            // conflict resolution instead of reading it from file since at this point
-            // we still have not updated the local file.
-            const content =
-              resolution?.content ||
-              (await this.vault.adapter.read(normalizedPath));
-            newTreeFiles[action.filePath] = {
-              path: action.filePath,
-              mode: "100644",
-              type: "blob",
-              content: content,
-            };
-            break;
+        try {
+          switch (action.type) {
+            case "upload": {
+              const normalizedPath = normalizePath(action.filePath);
+              const resolution = conflictResolutions.find(
+                (c: ConflictResolution) => c.filePath === action.filePath,
+              );
+              // If the file was conflicting we need to read the content from the
+              // conflict resolution instead of reading it from file since at this point
+              // we still have not updated the local file.
+              const content =
+                resolution?.content ||
+                (await this.vault.adapter.read(normalizedPath));
+              newTreeFiles[action.filePath] = {
+                path: action.filePath,
+                mode: "100644",
+                type: "blob",
+                content: content,
+              };
+              break;
+            }
+            case "delete_remote": {
+              newTreeFiles[action.filePath].sha = null;
+              break;
+            }
+            case "download":
+              break;
+            case "delete_local":
+              break;
           }
-          case "delete_remote": {
-            newTreeFiles[action.filePath].sha = null;
-            break;
-          }
-          case "download":
-            break;
-          case "delete_local":
-            break;
+        } catch (err) {
+          await this.logger.error('Failed to process sync action', {
+            error: err.message || err.toString(),
+            errorCode: err.code,
+            errorPath: err.path,
+            action: action,
+          }, {
+            operation: `sync_action_${action.type}`,
+            repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+            branch: this.settings.githubBranch,
+            filePath: action.filePath,
+          });
+          throw err;
         }
       }),
     );
@@ -602,15 +617,46 @@ export default class SyncManager {
       ...actions
         .filter((action) => action.type === "download")
         .map(async (action: SyncAction) => {
-          await this.downloadFile(
-            files[action.filePath],
-            remoteMetadata.files[action.filePath].lastModified,
-          );
+          try {
+            await this.downloadFile(
+              files[action.filePath],
+              remoteMetadata.files[action.filePath].lastModified,
+            );
+          } catch (err) {
+            await this.logger.error('Failed to download file in sync', {
+              error: err.message || err.toString(),
+              errorCode: err.code,
+              errorPath: err.path,
+              action: action,
+              fileInfo: files[action.filePath],
+            }, {
+              operation: 'sync_download',
+              repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+              branch: this.settings.githubBranch,
+              filePath: action.filePath,
+            });
+            throw err;
+          }
         }),
       ...actions
         .filter((action) => action.type === "delete_local")
         .map(async (action: SyncAction) => {
-          await this.deleteLocalFile(action.filePath);
+          try {
+            await this.deleteLocalFile(action.filePath);
+          } catch (err) {
+            await this.logger.error('Failed to delete local file in sync', {
+              error: err.message || err.toString(),
+              errorCode: err.code,
+              errorPath: err.path,
+              action: action,
+            }, {
+              operation: 'sync_delete',
+              repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+              branch: this.settings.githubBranch,
+              filePath: action.filePath,
+            });
+            throw err;
+          }
         }),
     ]);
 
@@ -993,6 +1039,21 @@ export default class SyncManager {
         // File already exists and has the same SHA, no need to download it again.
         return;
       }
+
+      // Validate file path for potential issues
+      const pathValidation = validateFilePath(file.path);
+      if (!pathValidation.isValid) {
+        await this.logger.warn('File path contains problematic characters', {
+          originalPath: file.path,
+          issues: pathValidation.issues,
+          suggestedPath: pathValidation.suggestedPath,
+        }, {
+          operation: 'download_file_validation',
+          filePath: file.path,
+        });
+        // Note: We continue with the original path for now, but log the issue
+      }
+
       const blob = await this.client.getBlob({ sha: file.sha, retry: true });
       const normalizedPath = normalizePath(file.path);
       const fileFolder = normalizePath(
@@ -1015,10 +1076,17 @@ export default class SyncManager {
       await this.metadataStore.save();
     } catch (err) {
       await this.logger.error('Failed to download file', {
-        ...err,
+        error: err.message || err.toString(),
         errorCode: err.code,
         errorPath: err.path,
-        fileInfo: file,
+        errorName: err.name,
+        errorStack: err.stack,
+        fileInfo: {
+          path: file.path,
+          sha: file.sha,
+          size: file.size,
+        },
+        normalizedPath: normalizePath(file.path),
       }, {
         operation: 'download_file',
         repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,

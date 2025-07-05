@@ -123,3 +123,46 @@ export function createDetailedErrorMessage(
   
   return `${baseMessage} (during ${operation}${contextInfo ? `, ${contextInfo}` : ''})`;
 }
+
+/**
+ * Checks if a file path contains characters that might cause issues on some file systems
+ * @param filePath - The file path to check
+ * @returns Object with validation result and suggested alternative if needed
+ */
+export function validateFilePath(filePath: string): {
+  isValid: boolean;
+  issues: string[];
+  suggestedPath?: string;
+} {
+  const issues: string[] = [];
+  let suggestedPath = filePath;
+
+  // Characters that can cause issues on various file systems
+  const problematicChars = ['"', '<', '>', '|', ':', '*', '?', '\\'];
+  const foundChars = problematicChars.filter(char => filePath.includes(char));
+  
+  if (foundChars.length > 0) {
+    issues.push(`Contains problematic characters: ${foundChars.join(', ')}`);
+    // Replace problematic characters with safe alternatives
+    suggestedPath = filePath
+      .replace(/"/g, "'")  // Replace quotes with single quotes
+      .replace(/[<>|:*?\\]/g, '_');  // Replace other problematic chars with underscore
+  }
+
+  // Check for extremely long paths (most file systems have limits)
+  if (filePath.length > 260) {
+    issues.push('Path is too long (>260 characters)');
+  }
+
+  // Check for paths ending with space or period (can cause issues on Windows)
+  if (filePath.endsWith(' ') || filePath.endsWith('.')) {
+    issues.push('Path ends with space or period');
+    suggestedPath = suggestedPath.trimEnd().replace(/\.$/, '');
+  }
+
+  return {
+    isValid: issues.length === 0,
+    issues,
+    suggestedPath: issues.length > 0 ? suggestedPath : undefined,
+  };
+}
