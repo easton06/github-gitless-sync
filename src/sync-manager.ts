@@ -416,13 +416,31 @@ export default class SyncManager {
       new Notice("Sync successful", 5000);
     } catch (err) {
       // Enhanced error reporting with context
-      const errorMessage = err.getUserFriendlyMessage ? err.getUserFriendlyMessage() : err.message || 'Unknown error occurred';
+      let errorMessage = err.getUserFriendlyMessage ? err.getUserFriendlyMessage() : err.message || 'Unknown error occurred';
       const debugInfo = err.status ? ` (HTTP ${err.status})` : '';
       
-      await this.logger.error('Sync failed', err, {
+      // Provide specific guidance for common file system errors
+      if (err.code === 'ENOENT') {
+        errorMessage = 'File or directory not found. This may indicate missing local files or corrupted metadata. Try resetting the plugin settings if the issue persists.';
+      } else if (err.code === 'EACCES') {
+        errorMessage = 'Permission denied accessing file or directory. Check file permissions.';
+      } else if (err.code === 'ENOTDIR') {
+        errorMessage = 'Expected directory but found file. This may indicate file system corruption.';
+      } else if (err.code === 'EISDIR') {
+        errorMessage = 'Expected file but found directory. This may indicate file system corruption.';
+      }
+      
+      await this.logger.error('Sync failed', {
+        ...err,
+        errorCode: err.code,
+        errorPath: err.path,
+        errorErrno: err.errno,
+        errorSyscall: err.syscall,
+      }, {
         operation: 'sync',
         repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
         branch: this.settings.githubBranch,
+        filePath: err.path,
       });
       
       // Show the error to the user, it's not automatically dismissed to make sure
@@ -818,19 +836,36 @@ export default class SyncManager {
    * @returns String containing the file SHA1 or null in case the file doesn't exist
    */
   async calculateSHA(filePath: string): Promise<string | null> {
-    if (!(await this.vault.adapter.exists(filePath))) {
-      // The file doesn't exist, can't calculate any SHA
-      return null;
+    try {
+      if (!(await this.vault.adapter.exists(filePath))) {
+        // The file doesn't exist, can't calculate any SHA
+        await this.logger.warn('File does not exist for SHA calculation', { filePath }, {
+          operation: 'calculate_sha',
+          filePath: filePath,
+        });
+        return null;
+      }
+      const contentBuffer = await this.vault.adapter.readBinary(filePath);
+      const contentBytes = new Uint8Array(contentBuffer);
+      const header = new TextEncoder().encode(`blob ${contentBytes.length}\0`);
+      const store = new Uint8Array([...header, ...contentBytes]);
+      return await crypto.subtle.digest("SHA-1", store).then((hash) =>
+        Array.from(new Uint8Array(hash))
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join(""),
+      );
+    } catch (err) {
+      await this.logger.error('Failed to calculate SHA for file', {
+        ...err,
+        errorCode: err.code,
+        errorPath: err.path,
+      }, {
+        operation: 'calculate_sha',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        filePath: filePath,
+      });
+      throw err;
     }
-    const contentBuffer = await this.vault.adapter.readBinary(filePath);
-    const contentBytes = new Uint8Array(contentBuffer);
-    const header = new TextEncoder().encode(`blob ${contentBytes.length}\0`);
-    const store = new Uint8Array([...header, ...contentBytes]);
-    return await crypto.subtle.digest("SHA-1", store).then((hash) =>
-      Array.from(new Uint8Array(hash))
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join(""),
-    );
   }
 
   /**
@@ -952,39 +987,68 @@ export default class SyncManager {
   }
 
   async downloadFile(file: GetTreeResponseItem, lastModified: number) {
-    const fileMetadata = this.metadataStore.data.files[file.path];
-    if (fileMetadata && fileMetadata.sha === file.sha) {
-      // File already exists and has the same SHA, no need to download it again.
-      return;
+    try {
+      const fileMetadata = this.metadataStore.data.files[file.path];
+      if (fileMetadata && fileMetadata.sha === file.sha) {
+        // File already exists and has the same SHA, no need to download it again.
+        return;
+      }
+      const blob = await this.client.getBlob({ sha: file.sha, retry: true });
+      const normalizedPath = normalizePath(file.path);
+      const fileFolder = normalizePath(
+        normalizedPath.split("/").slice(0, -1).join("/"),
+      );
+      if (!(await this.vault.adapter.exists(fileFolder))) {
+        await this.vault.adapter.mkdir(fileFolder);
+      }
+      await this.vault.adapter.writeBinary(
+        normalizedPath,
+        base64ToArrayBuffer(blob.content),
+      );
+      this.metadataStore.data.files[file.path] = {
+        path: file.path,
+        sha: file.sha,
+        dirty: false,
+        justDownloaded: true,
+        lastModified: lastModified,
+      };
+      await this.metadataStore.save();
+    } catch (err) {
+      await this.logger.error('Failed to download file', {
+        ...err,
+        errorCode: err.code,
+        errorPath: err.path,
+        fileInfo: file,
+      }, {
+        operation: 'download_file',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+        filePath: file.path,
+      });
+      throw err;
     }
-    const blob = await this.client.getBlob({ sha: file.sha, retry: true });
-    const normalizedPath = normalizePath(file.path);
-    const fileFolder = normalizePath(
-      normalizedPath.split("/").slice(0, -1).join("/"),
-    );
-    if (!(await this.vault.adapter.exists(fileFolder))) {
-      await this.vault.adapter.mkdir(fileFolder);
-    }
-    await this.vault.adapter.writeBinary(
-      normalizedPath,
-      base64ToArrayBuffer(blob.content),
-    );
-    this.metadataStore.data.files[file.path] = {
-      path: file.path,
-      sha: file.sha,
-      dirty: false,
-      justDownloaded: true,
-      lastModified: lastModified,
-    };
-    await this.metadataStore.save();
   }
 
   async deleteLocalFile(filePath: string) {
-    const normalizedPath = normalizePath(filePath);
-    await this.vault.adapter.remove(normalizedPath);
-    this.metadataStore.data.files[filePath].deleted = true;
-    this.metadataStore.data.files[filePath].deletedAt = Date.now();
-    this.metadataStore.save();
+    try {
+      const normalizedPath = normalizePath(filePath);
+      await this.vault.adapter.remove(normalizedPath);
+      this.metadataStore.data.files[filePath].deleted = true;
+      this.metadataStore.data.files[filePath].deletedAt = Date.now();
+      this.metadataStore.save();
+    } catch (err) {
+      await this.logger.error('Failed to delete local file', {
+        ...err,
+        errorCode: err.code,
+        errorPath: err.path,
+      }, {
+        operation: 'delete_local_file',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+        filePath: filePath,
+      });
+      throw err;
+    }
   }
 
   async loadMetadata() {

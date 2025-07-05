@@ -56,11 +56,26 @@ export default class MetadataStore {
    * Loads the metadata from disk.
    */
   async load() {
-    const fileExists = await this.vault.adapter.exists(this.metadataFile);
-    if (fileExists) {
-      const content = await this.vault.adapter.read(this.metadataFile);
-      this.data = JSON.parse(content);
-    } else {
+    try {
+      const fileExists = await this.vault.adapter.exists(this.metadataFile);
+      if (fileExists) {
+        const content = await this.vault.adapter.read(this.metadataFile);
+        try {
+          this.data = JSON.parse(content);
+          // Validate the loaded data structure
+          if (!this.data.files || typeof this.data.files !== 'object') {
+            console.warn('Metadata file has invalid structure, resetting');
+            this.reset();
+          }
+        } catch (parseError) {
+          console.error('Failed to parse metadata file, resetting:', parseError);
+          this.reset();
+        }
+      } else {
+        this.data = { lastSync: 0, files: {} };
+      }
+    } catch (err) {
+      console.error('Failed to load metadata, using default:', err);
       this.data = { lastSync: 0, files: {} };
     }
   }
@@ -70,10 +85,15 @@ export default class MetadataStore {
    */
   async save() {
     this.writeQueue = this.writeQueue.then(async () => {
-      await this.vault.adapter.write(
-        this.metadataFile,
-        JSON.stringify(this.data),
-      );
+      try {
+        await this.vault.adapter.write(
+          this.metadataFile,
+          JSON.stringify(this.data),
+        );
+      } catch (err) {
+        console.error('Failed to save metadata:', err);
+        throw err;
+      }
     });
     return this.writeQueue;
   }

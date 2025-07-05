@@ -71,6 +71,12 @@ export default class EventsListener {
       return;
     }
 
+    // Check if the file exists in metadata before trying to update it
+    if (!this.metadataStore.data.files[filePath]) {
+      await this.logger.warn("Attempted to delete file not in metadata", { filePath });
+      return;
+    }
+
     this.metadataStore.data.files[filePath].deleted = true;
     this.metadataStore.data.files[filePath].deletedAt = Date.now();
     await this.metadataStore.save();
@@ -100,8 +106,20 @@ export default class EventsListener {
       );
       return;
     }
-    this.metadataStore.data.files[file.path].lastModified = Date.now();
-    this.metadataStore.data.files[file.path].dirty = true;
+    // Ensure the file exists in metadata before updating it
+    if (!this.metadataStore.data.files[file.path]) {
+      // File doesn't exist in metadata, create it
+      this.metadataStore.data.files[file.path] = {
+        path: file.path,
+        sha: null,
+        dirty: true,
+        justDownloaded: false,
+        lastModified: Date.now(),
+      };
+    } else {
+      this.metadataStore.data.files[file.path].lastModified = Date.now();
+      this.metadataStore.data.files[file.path].dirty = true;
+    }
     await this.metadataStore.save();
     await this.logger.info("Updated modified file", file.path);
   }
