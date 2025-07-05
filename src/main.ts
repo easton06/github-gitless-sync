@@ -47,7 +47,7 @@ export default class GitHubSyncPlugin extends Plugin {
       this.settings.githubRepo === "" ||
       this.settings.githubBranch === ""
     ) {
-      new Notice("Go to settings to configure syncing");
+      new Notice("GitHub Sync is not configured. Please go to Settings → GitHub Sync to configure your repository connection.", 8000);
     }
   }
 
@@ -148,7 +148,7 @@ export default class GitHubSyncPlugin extends Plugin {
       this.settings.githubRepo === "" ||
       this.settings.githubBranch === ""
     ) {
-      new Notice("Sync plugin not configured");
+      new Notice("GitHub Sync is not configured. Please go to Settings → GitHub Sync to set up your repository connection.", 6000);
       return;
     }
     if (this.settings.firstSync) {
@@ -158,11 +158,21 @@ export default class GitHubSyncPlugin extends Plugin {
         this.settings.firstSync = false;
         this.saveSettings();
         // Shown only if sync doesn't fail
-        new Notice("Sync successful", 5000);
+        new Notice("First sync completed successfully!", 5000);
       } catch (err) {
+        // Enhanced error reporting with context
+        const errorMessage = err.getUserFriendlyMessage ? err.getUserFriendlyMessage() : err.message || 'Unknown error occurred';
+        const debugInfo = err.status ? ` (HTTP ${err.status})` : '';
+        
+        await this.logger.error('First sync failed', err, {
+          operation: 'first_sync',
+          repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+          branch: this.settings.githubBranch,
+        });
+        
         // Show the error to the user, it's not automatically dismissed to make sure
         // the user sees it.
-        new Notice(`Error syncing. ${err}`);
+        new Notice(`First sync failed: ${errorMessage}${debugInfo}\n\nCheck logs for details. Repository: ${this.settings.githubOwner}/${this.settings.githubRepo}`, 0);
       }
       notice.hide();
     } else {

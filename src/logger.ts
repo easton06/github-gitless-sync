@@ -24,6 +24,13 @@ export default class Logger {
     level: string,
     message: string,
     data?: any,
+    context?: {
+      operation?: string;
+      repository?: string;
+      branch?: string;
+      filePath?: string;
+      stack?: string;
+    },
   ): Promise<void> {
     if (!this.enabled) return;
 
@@ -32,6 +39,14 @@ export default class Logger {
       level,
       message,
       additional_data: data,
+      context: {
+        operation: context?.operation,
+        repository: context?.repository,
+        branch: context?.branch,
+        filePath: context?.filePath,
+        stack: context?.stack,
+        userAgent: 'github-gitless-sync-obsidian',
+      },
     };
 
     await this.vault.adapter.append(
@@ -56,15 +71,34 @@ export default class Logger {
     this.enabled = false;
   }
 
-  async info(message: string, data?: any): Promise<void> {
-    await this.write("INFO", message, data);
+  async info(message: string, data?: any, context?: {
+    operation?: string;
+    repository?: string;
+    branch?: string;
+    filePath?: string;
+  }): Promise<void> {
+    await this.write("INFO", message, data, context);
   }
 
-  async warn(message: string, data?: any): Promise<void> {
-    await this.write("WARN", message, data);
+  async warn(message: string, data?: any, context?: {
+    operation?: string;
+    repository?: string;
+    branch?: string;
+    filePath?: string;
+  }): Promise<void> {
+    await this.write("WARN", message, data, context);
   }
 
-  async error(message: string, data?: any): Promise<void> {
-    await this.write("ERROR", message, data);
+  async error(message: string, data?: any, context?: {
+    operation?: string;
+    repository?: string;
+    branch?: string;
+    filePath?: string;
+    stack?: string;
+  }): Promise<void> {
+    await this.write("ERROR", message, data, {
+      ...context,
+      stack: context?.stack || new Error().stack,
+    });
   }
 }

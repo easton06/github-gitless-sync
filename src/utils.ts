@@ -97,3 +97,29 @@ export async function retryUntil<T>(
     delay *= backoffFactor;
   }
 }
+
+/**
+ * Creates a detailed error message with context for debugging
+ * @param error - The original error object
+ * @param operation - The operation being performed when the error occurred
+ * @param context - Additional context like file paths, repository info, etc.
+ * @returns A formatted error message with debugging information
+ */
+export function createDetailedErrorMessage(
+  error: any,
+  operation: string,
+  context?: {
+    repository?: string;
+    branch?: string;
+    filePath?: string;
+    [key: string]: any;
+  }
+): string {
+  const baseMessage = error.message || error.toString() || 'Unknown error';
+  const contextInfo = context ? Object.entries(context)
+    .filter(([_, value]) => value != null)
+    .map(([key, value]) => `${key}: ${value}`)
+    .join(', ') : '';
+  
+  return `${baseMessage} (during ${operation}${contextInfo ? `, ${contextInfo}` : ''})`;
+}

@@ -123,6 +123,11 @@ export default class SyncManager {
       // 404 instead is returned in case there are no files.
       // Either way we can handle both by commiting a new empty manifest.
       if (err.status !== 409 && err.status !== 404) {
+        await this.logger.error('First sync failed', err, {
+          operation: 'first_sync',
+          repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+          branch: this.settings.githubBranch,
+        });
         this.syncing = false;
         throw err;
       }
@@ -157,8 +162,13 @@ export default class SyncManager {
 
     if (!repositoryIsEmpty && !vaultIsEmpty) {
       // Both have files, we can't sync, show error
-      await this.logger.error("Both remote and local have files, can't sync");
-      throw new Error("Both remote and local have files, can't sync");
+      const errorMessage = "Both remote and local have files, can't sync. Please resolve conflicts manually by either clearing the local vault or the remote repository before syncing.";
+      await this.logger.error(errorMessage, { repositoryIsEmpty, vaultIsEmpty }, {
+        operation: 'first_sync_conflict',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+      });
+      throw new Error(errorMessage);
     } else if (repositoryIsEmpty) {
       // Remote has no files and no manifest, let's just upload whatever we have locally.
       // This is fine even if the vault is empty.
@@ -405,9 +415,19 @@ export default class SyncManager {
       // Shown only if sync doesn't fail
       new Notice("Sync successful", 5000);
     } catch (err) {
+      // Enhanced error reporting with context
+      const errorMessage = err.getUserFriendlyMessage ? err.getUserFriendlyMessage() : err.message || 'Unknown error occurred';
+      const debugInfo = err.status ? ` (HTTP ${err.status})` : '';
+      
+      await this.logger.error('Sync failed', err, {
+        operation: 'sync',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+      });
+      
       // Show the error to the user, it's not automatically dismissed to make sure
       // the user sees it.
-      new Notice(`Error syncing. ${err}`);
+      new Notice(`Sync failed: ${errorMessage}${debugInfo}\n\nCheck logs for details`, 0);
     }
     this.syncing = false;
     notice.hide();
@@ -421,8 +441,13 @@ export default class SyncManager {
     const manifest = files[`${this.vault.configDir}/${MANIFEST_FILE_NAME}`];
 
     if (manifest === undefined) {
-      await this.logger.error("Remote manifest is missing", { files, treeSha });
-      throw new Error("Remote manifest is missing");
+      const errorMessage = "Remote manifest is missing. This usually means the repository was not initialized properly. Please try running a first sync.";
+      await this.logger.error(errorMessage, { files, treeSha }, {
+        operation: 'sync_manifest_check',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+      });
+      throw new Error(errorMessage);
     }
 
     if (
@@ -1093,7 +1118,12 @@ export default class SyncManager {
    */
   startSyncInterval(minutes: number): number {
     if (this.syncIntervalId) {
-      throw new Error("Sync interval is already running");
+      const errorMessage = "Sync interval is already running. Please stop the current interval before starting a new one.";
+      this.logger.error(errorMessage, { currentIntervalId: this.syncIntervalId }, {
+        operation: 'start_sync_interval',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+      });
+      throw new Error(errorMessage);
     }
     this.syncIntervalId = window.setInterval(
       async () => await this.sync(),

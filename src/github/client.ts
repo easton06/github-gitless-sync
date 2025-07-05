@@ -54,8 +54,44 @@ class GithubAPIError extends Error {
   constructor(
     public status: number,
     message: string,
+    public operation?: string,
+    public repository?: string,
+    public branch?: string,
+    public apiResponse?: any,
   ) {
     super(message);
+    this.name = 'GithubAPIError';
+  }
+
+  getUserFriendlyMessage(): string {
+    const baseMessage = this.getStatusMessage();
+    const context = this.repository ? ` for repository ${this.repository}` : '';
+    const branchContext = this.branch ? ` on branch ${this.branch}` : '';
+    const operationContext = this.operation ? ` during ${this.operation}` : '';
+    
+    return `${baseMessage}${context}${branchContext}${operationContext}`;
+  }
+
+  private getStatusMessage(): string {
+    switch (this.status) {
+      case 401:
+        return 'Authentication failed. Please check your GitHub token';
+      case 403:
+        return 'Access forbidden. Check repository permissions or rate limits';
+      case 404:
+        return 'Repository, branch, or resource not found';
+      case 409:
+        return 'Conflict occurred. The resource may have been modified';
+      case 422:
+        return 'Invalid request. Please check your input data';
+      case 500:
+        return 'GitHub server error. Please try again later';
+      case 502:
+      case 503:
+        return 'GitHub service temporarily unavailable. Please try again later';
+      default:
+        return `Request failed with status ${this.status}`;
+    }
   }
 }
 
@@ -97,10 +133,19 @@ export default class GithubClient {
     );
 
     if (response.status < 200 || response.status >= 400) {
-      await this.logger.error("Failed to get repo content", response);
+      const context = {
+        operation: 'get_repo_content',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+      };
+      await this.logger.error("Failed to get repo content", response, context);
       throw new GithubAPIError(
         response.status,
         `Failed to get repo content, status ${response.status}`,
+        'fetching repository content',
+        `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        this.settings.githubBranch,
+        response.json,
       );
     }
 
@@ -148,10 +193,19 @@ export default class GithubClient {
     );
 
     if (response.status < 200 || response.status >= 400) {
-      await this.logger.error("Failed to create tree", response);
+      const context = {
+        operation: 'create_tree',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+      };
+      await this.logger.error("Failed to create tree", { response, tree }, context);
       throw new GithubAPIError(
         response.status,
         `Failed to create tree, status ${response.status}`,
+        'creating git tree',
+        `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        this.settings.githubBranch,
+        response.json,
       );
     }
     return response.json.sha;
@@ -199,10 +253,19 @@ export default class GithubClient {
     );
 
     if (response.status < 200 || response.status >= 400) {
-      await this.logger.error("Failed to create commit", response);
+      const context = {
+        operation: 'create_commit',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+      };
+      await this.logger.error("Failed to create commit", { response, message, treeSha, parent }, context);
       throw new GithubAPIError(
         response.status,
         `Failed to create commit, status ${response.status}`,
+        'creating commit',
+        `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        this.settings.githubBranch,
+        response.json,
       );
     }
     return response.json.sha;
@@ -229,10 +292,19 @@ export default class GithubClient {
     );
 
     if (response.status < 200 || response.status >= 400) {
-      await this.logger.error("Failed to get branch head sha", response);
+      const context = {
+        operation: 'get_branch_head',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+      };
+      await this.logger.error("Failed to get branch head sha", response, context);
       throw new GithubAPIError(
         response.status,
         `Failed to get branch head sha, status ${response.status}`,
+        'getting branch head',
+        `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        this.settings.githubBranch,
+        response.json,
       );
     }
     return response.json.object.sha;
@@ -271,10 +343,19 @@ export default class GithubClient {
     );
 
     if (response.status < 200 || response.status >= 400) {
-      await this.logger.error("Failed to update branch head sha", response);
+      const context = {
+        operation: 'update_branch_head',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+      };
+      await this.logger.error("Failed to update branch head sha", { response, sha }, context);
       throw new GithubAPIError(
         response.status,
         `Failed to update branch head sha, status ${response.status}`,
+        'updating branch head',
+        `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        this.settings.githubBranch,
+        response.json,
       );
     }
   }
@@ -314,10 +395,19 @@ export default class GithubClient {
     );
 
     if (response.status < 200 || response.status >= 400) {
-      await this.logger.error("Failed to create blob", response);
+      const context = {
+        operation: 'create_blob',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+      };
+      await this.logger.error("Failed to create blob", { response, encoding, contentSize: content.length }, context);
       throw new GithubAPIError(
         response.status,
         `Failed to create blob, status ${response.status}`,
+        'creating blob',
+        `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        this.settings.githubBranch,
+        response.json,
       );
     }
     return {
@@ -355,10 +445,19 @@ export default class GithubClient {
     );
 
     if (response.status < 200 || response.status >= 400) {
-      await this.logger.error("Failed to get blob", response);
+      const context = {
+        operation: 'get_blob',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+      };
+      await this.logger.error("Failed to get blob", { response, sha }, context);
       throw new GithubAPIError(
         response.status,
         `Failed to get blob, status ${response.status}`,
+        'getting blob',
+        `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        this.settings.githubBranch,
+        response.json,
       );
     }
     return response.json;
@@ -405,10 +504,20 @@ export default class GithubClient {
     );
 
     if (response.status < 200 || response.status >= 400) {
-      await this.logger.error("Failed to create file", response);
+      const context = {
+        operation: 'create_file',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+        filePath: path,
+      };
+      await this.logger.error("Failed to create file", { response, path, message }, context);
       throw new GithubAPIError(
         response.status,
         `Failed to create file, status ${response.status}`,
+        'creating file',
+        `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        this.settings.githubBranch,
+        response.json,
       );
     }
   }
@@ -438,10 +547,19 @@ export default class GithubClient {
     );
 
     if (response.status < 200 || response.status >= 400) {
-      await this.logger.error("Failed to download zip archive", response);
+      const context = {
+        operation: 'download_archive',
+        repository: `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        branch: this.settings.githubBranch,
+      };
+      await this.logger.error("Failed to download zip archive", response, context);
       throw new GithubAPIError(
         response.status,
         `Failed to download zip archive, status ${response.status}`,
+        'downloading repository archive',
+        `${this.settings.githubOwner}/${this.settings.githubRepo}`,
+        this.settings.githubBranch,
+        response.json,
       );
     }
     return response.arrayBuffer;
