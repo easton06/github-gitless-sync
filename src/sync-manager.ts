@@ -587,7 +587,10 @@ export default class SyncManager {
               break;
             }
             case "delete_remote": {
-              newTreeFiles[action.filePath].sha = null;
+              // Only set sha to null if the file exists in the tree
+              if (newTreeFiles[action.filePath]) {
+                newTreeFiles[action.filePath].sha = null;
+              }
               break;
             }
             case "download":
