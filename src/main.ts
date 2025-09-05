@@ -1,306 +1,317 @@
 import {
-  EventRef,
-  Plugin,
-  WorkspaceLeaf,
-  normalizePath,
-  Notice,
+	EventRef,
+	Plugin,
+	WorkspaceLeaf,
+	normalizePath,
+	Notice,
 } from "obsidian";
 import { GitHubSyncSettings, DEFAULT_SETTINGS } from "./settings/settings";
 import GitHubSyncSettingsTab from "./settings/tab";
 import SyncManager, { ConflictFile, ConflictResolution } from "./sync-manager";
 import Logger from "./logger";
 import {
-  ConflictsResolutionView,
-  CONFLICTS_RESOLUTION_VIEW_TYPE,
+	ConflictsResolutionView,
+	CONFLICTS_RESOLUTION_VIEW_TYPE,
 } from "./views/conflicts-resolution/view";
 
 export default class GitHubSyncPlugin extends Plugin {
-  settings: GitHubSyncSettings;
-  syncManager: SyncManager;
-  logger: Logger;
+	settings: GitHubSyncSettings;
+	syncManager: SyncManager;
+	logger: Logger;
 
-  statusBarItem: HTMLElement | null = null;
-  syncRibbonIcon: HTMLElement | null = null;
-  conflictsRibbonIcon: HTMLElement | null = null;
+	statusBarItem: HTMLElement | null = null;
+	syncRibbonIcon: HTMLElement | null = null;
+	conflictsRibbonIcon: HTMLElement | null = null;
 
-  activeLeafChangeListener: EventRef | null = null;
-  vaultCreateListener: EventRef | null = null;
-  vaultModifyListener: EventRef | null = null;
+	activeLeafChangeListener: EventRef | null = null;
+	vaultCreateListener: EventRef | null = null;
+	vaultModifyListener: EventRef | null = null;
 
-  // Called in ConflictResolutionView when the user solves all the conflicts.
-  // This is initialized every time we open the view to set new conflicts so
-  // we can notify the SyncManager that everything has been resolved and the sync
-  // process can continue on.
-  conflictsResolver: ((resolutions: ConflictResolution[]) => void) | null =
-    null;
+	// Called in ConflictResolutionView when the user solves all the conflicts.
+	// This is initialized every time we open the view to set new conflicts so
+	// we can notify the SyncManager that everything has been resolved and the sync
+	// process can continue on.
+	conflictsResolver: ((resolutions: ConflictResolution[]) => void) | null =
+		null;
 
-  // We keep track of the sync conflicts in here too in case the
-  // conflicts view must be rebuilt, or the user closes the view
-  // and it gets destroyed.
-  // By keeping them here we can recreate it easily.
-  private conflicts: ConflictFile[] = [];
+	// We keep track of the sync conflicts in here too in case the
+	// conflicts view must be rebuilt, or the user closes the view
+	// and it gets destroyed.
+	// By keeping them here we can recreate it easily.
+	private conflicts: ConflictFile[] = [];
 
-  async onUserEnable() {
-    if (
-      this.settings.githubToken === "" ||
-      this.settings.githubOwner === "" ||
-      this.settings.githubRepo === "" ||
-      this.settings.githubBranch === ""
-    ) {
-      new Notice("Go to settings to configure syncing");
-    }
-  }
+	async onUserEnable() {
+		if (
+			this.settings.githubToken === "" ||
+			this.settings.githubOwner === "" ||
+			this.settings.githubRepo === "" ||
+			this.settings.githubBranch === ""
+		) {
+			new Notice("Go to settings to configure syncing");
+		}
+	}
 
-  getConflictsView(): ConflictsResolutionView | null {
-    const leaves = this.app.workspace.getLeavesOfType(
-      CONFLICTS_RESOLUTION_VIEW_TYPE,
-    );
-    if (leaves.length === 0) {
-      return null;
-    }
-    return leaves[0].view as ConflictsResolutionView;
-  }
+	getConflictsView(): ConflictsResolutionView | null {
+		const leaves = this.app.workspace.getLeavesOfType(
+			CONFLICTS_RESOLUTION_VIEW_TYPE,
+		);
+		if (leaves.length === 0) {
+			return null;
+		}
+		return leaves[0].view as ConflictsResolutionView;
+	}
 
-  async activateView() {
-    const { workspace } = this.app;
-    let leaf: WorkspaceLeaf | null = null;
-    const leaves = workspace.getLeavesOfType(CONFLICTS_RESOLUTION_VIEW_TYPE);
-    if (leaves.length > 0) {
-      leaf = leaves[0];
-    } else {
-      leaf = workspace.getLeaf(false)!;
-      await leaf.setViewState({
-        type: CONFLICTS_RESOLUTION_VIEW_TYPE,
-        active: true,
-      });
-    }
-    workspace.revealLeaf(leaf);
-  }
+	async activateView() {
+		const { workspace } = this.app;
+		let leaf: WorkspaceLeaf | null = null;
+		const leaves = workspace.getLeavesOfType(CONFLICTS_RESOLUTION_VIEW_TYPE);
+		if (leaves.length > 0) {
+			leaf = leaves[0];
+		} else {
+			leaf = workspace.getLeaf(false)!;
+			await leaf.setViewState({
+				type: CONFLICTS_RESOLUTION_VIEW_TYPE,
+				active: true,
+			});
+		}
+		workspace.revealLeaf(leaf);
+	}
 
-  async onload() {
-    await this.loadSettings();
+	async onload() {
+		await this.loadSettings();
 
-    this.logger = new Logger(this.app.vault, this.settings.enableLogging);
-    this.logger.init();
+		this.logger = new Logger(this.app.vault, this.settings.enableLogging);
+		this.logger.init();
 
-    this.registerView(
-      CONFLICTS_RESOLUTION_VIEW_TYPE,
-      (leaf) => new ConflictsResolutionView(leaf, this, this.conflicts),
-    );
+		this.registerView(
+			CONFLICTS_RESOLUTION_VIEW_TYPE,
+			(leaf) => new ConflictsResolutionView(leaf, this, this.conflicts),
+		);
 
-    this.addSettingTab(new GitHubSyncSettingsTab(this.app, this));
+		this.addSettingTab(new GitHubSyncSettingsTab(this.app, this));
 
-    this.syncManager = new SyncManager(
-      this.app.vault,
-      this.settings,
-      this.onConflicts.bind(this),
-      this.logger,
-    );
-    await this.syncManager.loadMetadata();
+		this.syncManager = new SyncManager(
+			this.app.vault,
+			this.settings,
+			this.onConflicts.bind(this),
+			this.logger,
+		);
+		await this.syncManager.loadMetadata();
 
-    if (this.settings.syncStrategy == "interval") {
-      this.restartSyncInterval();
-    }
+		if (this.settings.syncStrategy == "interval") {
+			this.restartSyncInterval();
+		}
 
-    this.app.workspace.onLayoutReady(async () => {
-      // Create the events handling only after tha layout is ready to avoid
-      // getting spammed with create events.
-      // See the official Obsidian docs:
-      // https://docs.obsidian.md/Reference/TypeScript+API/Vault/on('create')
-      this.syncManager.startEventsListener(this);
+		this.app.workspace.onLayoutReady(async () => {
+			// Create the events handling only after tha layout is ready to avoid
+			// getting spammed with create events.
+			// See the official Obsidian docs:
+			// https://docs.obsidian.md/Reference/TypeScript+API/Vault/on('create')
+			this.syncManager.startEventsListener(this);
 
-      // Load the ribbons after layout is ready so they're shown after the core
-      // buttons
-      if (this.settings.showStatusBarItem) {
-        this.showStatusBarItem();
-      }
+			// Load the ribbons after layout is ready so they're shown after the core
+			// buttons
+			if (this.settings.showStatusBarItem) {
+				this.showStatusBarItem();
+			}
 
-      if (this.settings.showConflictsRibbonButton) {
-        this.showConflictsRibbonIcon();
-      }
+			if (this.settings.showConflictsRibbonButton) {
+				this.showConflictsRibbonIcon();
+			}
 
-      if (this.settings.showSyncRibbonButton) {
-        this.showSyncRibbonIcon();
-      }
-    });
+			if (this.settings.showSyncRibbonButton) {
+				this.showSyncRibbonIcon();
+			}
+		});
 
-    this.addCommand({
-      id: "sync-files",
-      name: "Sync with GitHub",
-      repeatable: false,
-      icon: "refresh-cw",
-      callback: this.sync.bind(this),
-    });
+		this.addCommand({
+			id: "sync-files",
+			name: "Sync with GitHub",
+			repeatable: false,
+			icon: "refresh-cw",
+			callback: this.sync.bind(this),
+		});
 
-    this.addCommand({
-      id: "merge",
-      name: "Open sync conflicts view",
-      repeatable: false,
-      icon: "refresh-cw",
-      callback: this.openConflictsView.bind(this),
-    });
-  }
+		this.addCommand({
+			id: "merge",
+			name: "Open sync conflicts view",
+			repeatable: false,
+			icon: "refresh-cw",
+			callback: this.openConflictsView.bind(this),
+		});
 
-  async sync() {
-    if (
-      this.settings.githubToken === "" ||
-      this.settings.githubOwner === "" ||
-      this.settings.githubRepo === "" ||
-      this.settings.githubBranch === ""
-    ) {
-      new Notice("Sync plugin not configured");
-      return;
-    }
-    if (this.settings.firstSync) {
-      const notice = new Notice("Syncing...");
-      try {
-        await this.syncManager.firstSync();
-        this.settings.firstSync = false;
-        this.saveSettings();
-        // Shown only if sync doesn't fail
-        new Notice("Sync successful", 5000);
-      } catch (err) {
-        // Show the error to the user, it's not automatically dismissed to make sure
-        // the user sees it.
-        new Notice(`Error syncing. ${err}`);
-      }
-      notice.hide();
-    } else {
-      await this.syncManager.sync();
-    }
-    this.updateStatusBarItem();
-  }
+		this.addCommand({
+			id: "overwrite-remote-changes",
+			name: "Conflict view overwrite current selected file remote changes",
+			repeatable: false,
+			callback: this.overwriteFileRemoteChanges.bind(this),
+		})
+	}
 
-  async onunload() {
-    this.stopSyncInterval();
-  }
+	overwriteFileRemoteChanges() {
+		new Notice("Overwriting remote changes for the current conflict view file")
+	}
 
-  showStatusBarItem() {
-    if (this.statusBarItem) {
-      return;
-    }
-    this.statusBarItem = this.addStatusBarItem();
+	async sync() {
+		if (
+			this.settings.githubToken === "" ||
+			this.settings.githubOwner === "" ||
+			this.settings.githubRepo === "" ||
+			this.settings.githubBranch === ""
+		) {
+			new Notice("Sync plugin not configured");
+			return;
+		}
+		if (this.settings.firstSync) {
+			const notice = new Notice("Syncing...");
+			try {
+				await this.syncManager.firstSync();
+				this.settings.firstSync = false;
+				this.saveSettings();
+				// Shown only if sync doesn't fail
+				new Notice("Sync successful", 60000);
+			} catch (err) {
+				// Show the error to the user, it's not automatically dismissed to make sure
+				// the user sees it.
+				new Notice(`Error syncing. ${err}`);
+			}
+			notice.hide();
+		} else {
+			await this.syncManager.sync();
+		}
+		this.updateStatusBarItem();
+	}
 
-    if (!this.activeLeafChangeListener) {
-      this.activeLeafChangeListener = this.app.workspace.on(
-        "active-leaf-change",
-        () => this.updateStatusBarItem(),
-      );
-    }
-    if (!this.vaultCreateListener) {
-      this.vaultCreateListener = this.app.vault.on("create", () => {
-        this.updateStatusBarItem();
-      });
-    }
-    if (!this.vaultModifyListener) {
-      this.vaultModifyListener = this.app.vault.on("modify", () => {
-        this.updateStatusBarItem();
-      });
-    }
-  }
+	async onunload() {
+		this.stopSyncInterval();
+	}
 
-  hideStatusBarItem() {
-    this.statusBarItem?.remove();
-    this.statusBarItem = null;
-  }
+	showStatusBarItem() {
+		if (this.statusBarItem) {
+			return;
+		}
+		this.statusBarItem = this.addStatusBarItem();
 
-  updateStatusBarItem() {
-    if (!this.statusBarItem) {
-      return;
-    }
-    const activeFile = this.app.workspace.getActiveFile();
-    if (!activeFile) {
-      return;
-    }
+		if (!this.activeLeafChangeListener) {
+			this.activeLeafChangeListener = this.app.workspace.on(
+				"active-leaf-change",
+				() => this.updateStatusBarItem(),
+			);
+		}
+		if (!this.vaultCreateListener) {
+			this.vaultCreateListener = this.app.vault.on("create", () => {
+				this.updateStatusBarItem();
+			});
+		}
+		if (!this.vaultModifyListener) {
+			this.vaultModifyListener = this.app.vault.on("modify", () => {
+				this.updateStatusBarItem();
+			});
+		}
+	}
 
-    let state = "Unknown";
-    const fileData = this.syncManager.getFileMetadata(activeFile.path);
-    if (!fileData) {
-      state = "Untracked";
-    } else if (fileData.dirty) {
-      state = "Outdated";
-    } else if (!fileData.dirty) {
-      state = "Up to date";
-    }
+	hideStatusBarItem() {
+		this.statusBarItem?.remove();
+		this.statusBarItem = null;
+	}
 
-    this.statusBarItem.setText(`GitHub: ${state}`);
-  }
+	updateStatusBarItem() {
+		if (!this.statusBarItem) {
+			return;
+		}
+		const activeFile = this.app.workspace.getActiveFile();
+		if (!activeFile) {
+			return;
+		}
 
-  showSyncRibbonIcon() {
-    if (this.syncRibbonIcon) {
-      return;
-    }
-    this.syncRibbonIcon = this.addRibbonIcon(
-      "refresh-cw",
-      "Sync with GitHub",
-      this.sync.bind(this),
-    );
-  }
+		let state = "Unknown";
+		const fileData = this.syncManager.getFileMetadata(activeFile.path);
+		if (!fileData) {
+			state = "Untracked";
+		} else if (fileData.dirty) {
+			state = "Outdated";
+		} else if (!fileData.dirty) {
+			state = "Up to date";
+		}
 
-  hideSyncRibbonIcon() {
-    this.syncRibbonIcon?.remove();
-    this.syncRibbonIcon = null;
-  }
+		this.statusBarItem.setText(`GitHub: ${state}`);
+	}
 
-  showConflictsRibbonIcon() {
-    if (this.conflictsRibbonIcon) {
-      return;
-    }
-    this.conflictsRibbonIcon = this.addRibbonIcon(
-      "merge",
-      "Open sync conflicts view",
-      this.openConflictsView.bind(this),
-    );
-  }
+	showSyncRibbonIcon() {
+		if (this.syncRibbonIcon) {
+			return;
+		}
+		this.syncRibbonIcon = this.addRibbonIcon(
+			"refresh-cw",
+			"Sync with GitHub",
+			this.sync.bind(this),
+		);
+	}
 
-  hideConflictsRibbonIcon() {
-    this.conflictsRibbonIcon?.remove();
-    this.conflictsRibbonIcon = null;
-  }
+	hideSyncRibbonIcon() {
+		this.syncRibbonIcon?.remove();
+		this.syncRibbonIcon = null;
+	}
 
-  async openConflictsView() {
-    await this.activateView();
-    this.getConflictsView()?.setConflictFiles(this.conflicts);
-  }
+	showConflictsRibbonIcon() {
+		if (this.conflictsRibbonIcon) {
+			return;
+		}
+		this.conflictsRibbonIcon = this.addRibbonIcon(
+			"merge",
+			"Open sync conflicts view",
+			this.openConflictsView.bind(this),
+		);
+	}
 
-  async onConflicts(conflicts: ConflictFile[]): Promise<ConflictResolution[]> {
-    this.conflicts = conflicts;
-    return await new Promise(async (resolve) => {
-      this.conflictsResolver = resolve;
-      await this.activateView();
-      this.getConflictsView()?.setConflictFiles(conflicts);
-    });
-  }
+	hideConflictsRibbonIcon() {
+		this.conflictsRibbonIcon?.remove();
+		this.conflictsRibbonIcon = null;
+	}
 
-  async loadSettings() {
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
-  }
+	async openConflictsView() {
+		await this.activateView();
+		this.getConflictsView()?.setConflictFiles(this.conflicts);
+	}
 
-  async saveSettings() {
-    await this.saveData(this.settings);
-  }
+	async onConflicts(conflicts: ConflictFile[]): Promise<ConflictResolution[]> {
+		this.conflicts = conflicts;
+		return await new Promise(async (resolve) => {
+			this.conflictsResolver = resolve;
+			await this.activateView();
+			this.getConflictsView()?.setConflictFiles(conflicts);
+		});
+	}
 
-  // Proxy methods from sync manager to ease handling the interval
-  // when settings are changed
-  startSyncInterval() {
-    const intervalID = this.syncManager.startSyncInterval(
-      this.settings.syncInterval,
-    );
-    this.registerInterval(intervalID);
-  }
+	async loadSettings() {
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+	}
 
-  stopSyncInterval() {
-    this.syncManager.stopSyncInterval();
-  }
+	async saveSettings() {
+		await this.saveData(this.settings);
+	}
 
-  restartSyncInterval() {
-    this.syncManager.stopSyncInterval();
-    this.syncManager.startSyncInterval(this.settings.syncInterval);
-  }
+	// Proxy methods from sync manager to ease handling the interval
+	// when settings are changed
+	startSyncInterval() {
+		const intervalID = this.syncManager.startSyncInterval(
+			this.settings.syncInterval,
+		);
+		this.registerInterval(intervalID);
+	}
 
-  async reset() {
-    this.settings = DEFAULT_SETTINGS;
-    this.saveSettings();
-    await this.syncManager.resetMetadata();
-  }
+	stopSyncInterval() {
+		this.syncManager.stopSyncInterval();
+	}
+
+	restartSyncInterval() {
+		this.syncManager.stopSyncInterval();
+		this.syncManager.startSyncInterval(this.settings.syncInterval);
+	}
+
+	async reset() {
+		this.settings = DEFAULT_SETTINGS;
+		this.saveSettings();
+		await this.syncManager.resetMetadata();
+	}
 }
