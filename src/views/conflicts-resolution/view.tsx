@@ -4,12 +4,19 @@ import GitHubSyncPlugin from "src/main";
 import { ConflictFile, ConflictResolution } from "src/sync-manager";
 import SplitView from "./split-view/split-view";
 import UnifiedView from "./unified-view/unified-view";
+import * as React from "react";
+
+export interface ViewHandle {
+	acceptRemote: () => void;
+	overwriteRemote: () => void;
+}
 
 export const CONFLICTS_RESOLUTION_VIEW_TYPE = "conflicts-resolution-view";
 
 export class ConflictsResolutionView extends ItemView {
 	icon: IconName = "merge";
 	private root: Root | null = null;
+	private componentRef = React.createRef<ViewHandle>();
 
 	constructor(
 		leaf: WorkspaceLeaf,
@@ -37,6 +44,14 @@ export class ConflictsResolutionView extends ItemView {
 	setConflictFiles(conflicts: ConflictFile[]) {
 		this.conflicts = conflicts;
 		this.render(conflicts);
+	}
+
+	acceptRemoteForSelectedFile() {
+		this.componentRef.current?.acceptRemote();
+	}
+
+	overwriteRemoteForSelectedFile() {
+		this.componentRef.current?.overwriteRemote();
 	}
 
 	async onOpen() {
@@ -71,6 +86,7 @@ export class ConflictsResolutionView extends ItemView {
 		if (diffMode === "split") {
 			this.root.render(
 				<SplitView
+					ref={this.componentRef}
 					initialFiles={conflicts}
 					onResolveAllConflicts={this.resolveAllConflicts.bind(this)}
 				/>,
@@ -78,6 +94,7 @@ export class ConflictsResolutionView extends ItemView {
 		} else {
 			this.root.render(
 				<UnifiedView
+					ref={this.componentRef}
 					initialFiles={conflicts}
 					onResolveAllConflicts={this.resolveAllConflicts.bind(this)}
 				/>,

@@ -142,14 +142,37 @@ export default class GitHubSyncPlugin extends Plugin {
 
 		this.addCommand({
 			id: "overwrite-remote-changes",
-			name: "Conflict view overwrite current selected file remote changes",
+			name: "Overwrite remote changes in conflict view's current file",
 			repeatable: false,
 			callback: this.overwriteFileRemoteChanges.bind(this),
-		})
+		});
+
+		this.addCommand({
+			id: "accept-remote-changes",
+			name: "Accept remote changes in conflict view's current file",
+			repeatable: false,
+			callback: this.acceptFileRemoteChanges.bind(this),
+		});
+	}
+
+	acceptFileRemoteChanges() {
+		const view = this.getConflictsView();
+		if (view) {
+			view.acceptRemoteForSelectedFile();
+			new Notice("Accepted remote changes for the current file.");
+		} else {
+			new Notice("No conflicts view open.");
+		}
 	}
 
 	overwriteFileRemoteChanges() {
-		new Notice("Overwriting remote changes for the current conflict view file")
+		const view = this.getConflictsView();
+		if (view) {
+			view.overwriteRemoteForSelectedFile();
+			new Notice("Overwritten remote changes for the current file.");
+		} else {
+			new Notice("No conflicts view open.");
+		}
 	}
 
 	async sync() {
