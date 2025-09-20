@@ -186,17 +186,17 @@ export default class GitHubSyncPlugin extends Plugin {
 			return;
 		}
 		if (this.settings.firstSync) {
-			const notice = new Notice("Syncing...");
+			const notice = new Notice("Syncing...", 0);
 			try {
 				await this.syncManager.firstSync();
 				this.settings.firstSync = false;
 				this.saveSettings();
 				// Shown only if sync doesn't fail
-				new Notice("Sync successful", 60000);
+				new Notice("Sync successful", 0);
 			} catch (err) {
 				// Show the error to the user, it's not automatically dismissed to make sure
 				// the user sees it.
-				new Notice(`Error syncing. ${err}`);
+				new Notice(`Error syncing. ${err}`, 0);
 			}
 			notice.hide();
 		} else {
